@@ -6,17 +6,36 @@
   <style>
     body { font-family: sans-serif; margin: 0; background: #1c1917; color: #f5f5f4; }
     header { display: flex; gap: 12px; align-items: center; padding: 12px 20px; background: #44403c; }
+    nav button { background: #57534e; color: #f5f5f4; border: none; padding: 6px 14px; cursor: pointer; border-radius: 4px; }
+    nav button.active { background: #a8a29e; color: #1c1917; }
     main { max-width: 760px; margin: 20px auto; padding: 0 12px; }
     input, button { padding: 8px; margin-right: 8px; }
+    button.primary { background: #86efac; color: #1c1917; border: none; border-radius: 4px; cursor: pointer; }
     .alarm { color: #fca5a5; } .ok { color: #86efac; }
+    .muted { color: #a8a29e; font-size: 0.9em; }
     #live { min-height: 1.4em; }
     table { width: 100%; border-collapse: collapse; }
     td, th { border-bottom: 1px solid #57534e; padding: 6px; text-align: left; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: #292524; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.85em; }
+    .badge-changed { background: #b45309; color: #fff7ed; }
+    .banner { background: #b45309; color: #fff7ed; padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
+    .panel { border: 1px solid #57534e; border-radius: 6px; padding: 14px; margin: 12px 0; }
+    .panel h3 { margin: 0 0 8px; }
+    .sides { display: flex; gap: 14px; }
+    .side { flex: 1; background: #292524; border-radius: 6px; padding: 12px; }
+    .big { font-size: 1.6em; font-weight: bold; }
+    form.inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 16px; }
   </style>
 </head>
 <body>
   <header>
     <strong>矿井瓦斯班测台</strong>
+    <nav id="nav" hidden>
+      <button id="nav-readings" class="active">班测列表</button>
+      <button id="nav-compare">通风对照</button>
+    </nav>
     <span id="who"></span>
     <button id="out" hidden>退出</button>
   </header>
@@ -28,14 +47,64 @@
       <button id="go">登录</button>
       <p>gasman / gas123456 可上报；viewer / view123456 只能看</p>
     </section>
+
     <section id="app" hidden>
-      <p id="live">等待推送</p>
-      <form id="form">
-        <input id="site" placeholder="测点" />
-        <input id="ch4" type="number" step="0.01" placeholder="甲烷 %" />
-        <button>上报</button>
-      </form>
-      <table><thead><tr><th>测点</th><th>甲烷 %</th><th>状态</th><th>说明</th></tr></thead><tbody id="rows"></tbody></table>
+      <!-- 班测列表 -->
+      <div id="view-readings">
+        <p id="live">等待推送</p>
+        <form id="form" class="inline-form">
+          <input id="site" placeholder="测点" />
+          <input id="ch4" type="number" step="0.01" placeholder="甲烷 %" />
+          <button class="primary">上报</button>
+        </form>
+        <table>
+          <thead><tr><th>#</th><th>测点</th><th>甲烷 %</th><th>状态</th><th>说明</th><th id="th-fix"></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <!-- 通风对照列表与钉定 -->
+      <div id="view-compare" hidden>
+        <form id="pin-form" class="inline-form">
+          <label>本机班测
+            <select id="pin-local"></select>
+          </label>
+          <label>参照班测主键
+            <input id="pin-ref" type="number" min="1" placeholder="如 2" style="width: 90px" />
+          </label>
+          <label>通风间隔（分钟）
+            <input id="pin-minutes" type="number" min="1" placeholder="分钟" style="width: 90px" />
+          </label>
+          <button class="primary" type="submit">钉对照</button>
+        </form>
+        <p id="pin-tip" class="muted" hidden>旁观账号只能打开已钉对照，不能新钉。</p>
+        <table>
+          <thead><tr><th>#</th><th>本机测点</th><th>参照测点</th><th>浓度差（绝对值）</th><th>通风间隔</th><th>来源</th></tr></thead>
+          <tbody id="cmp-rows"></tbody>
+        </table>
+      </div>
+
+      <!-- 对照详情 -->
+      <div id="view-detail" hidden>
+        <p><button id="back-compare">← 返回通风对照</button></p>
+        <div id="detail-changed" class="banner" hidden>来源已变动：差仍为钉定时的数值，未随改正重算。</div>
+        <h2 id="detail-title"></h2>
+        <div class="sides">
+          <div class="panel side">
+            <h3>本机班测</h3>
+            <div id="detail-local"></div>
+          </div>
+          <div class="panel side">
+            <h3>参照班测（按主键引入）</h3>
+            <div id="detail-ref"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div>浓度差（服务端钉定时计算）：<span id="detail-diff" class="big"></span> %</div>
+          <div>通风间隔：<span id="detail-minutes"></span> 分钟</div>
+          <div class="muted" id="detail-meta"></div>
+        </div>
+      </div>
     </section>
   </main>
   <script src="/app.js"></script>
