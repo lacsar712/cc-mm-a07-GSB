@@ -44,6 +44,23 @@ class Reading(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class Comparison(Base):
+    __tablename__ = "comparisons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    local_reading_id: Mapped[int] = mapped_column()
+    ref_reading_id: Mapped[int] = mapped_column()
+    local_site: Mapped[str] = mapped_column(String(80))
+    ref_site: Mapped[str] = mapped_column(String(80))
+    local_ch4_pct: Mapped[float] = mapped_column(Float)
+    ref_ch4_pct: Mapped[float] = mapped_column(Float)
+    local_level: Mapped[str] = mapped_column(String(20))
+    ref_level: Mapped[str] = mapped_column(String(20))
+    delta_pct: Mapped[float] = mapped_column(Float)
+    vent_minutes: Mapped[int] = mapped_column()
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class LoginIn(BaseModel):
     username: str
     password: str
@@ -52,6 +69,16 @@ class LoginIn(BaseModel):
 class ReadingIn(BaseModel):
     site: str = Field(min_length=1, max_length=80)
     ch4_pct: float
+
+
+class ReadingPatch(BaseModel):
+    ch4_pct: float
+
+
+class ComparisonIn(BaseModel):
+    local_reading_id: int
+    ref_reading_id: int
+    vent_minutes: int = Field(gt=0)
 
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
@@ -168,6 +195,113 @@ async def create_reading(body: ReadingIn, user: dict = Depends(require_writer)):
     for ws in dead:
         sockets.discard(ws)
     return payload
+
+
+@app.patch("/api/readings/{reading_id}")
+async def correct_reading(
+    reading_id: int, body: ReadingPatch, user: dict = Depends(require_writer)
+):
+    db = SessionLocal()
+    try:
+        row = db.get(Reading, reading_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="班测不存在")
+        row.ch4_pct = body.ch4_pct
+        row.level, row.note = classify(body.ch4_pct)
+        db.commit()
+        payload = {
+            "id": row.id,
+            "site": row.site,
+            "ch4_pct": row.ch4_pct,
+            "level": row.level,
+            "note": row.note,
+        }
+    finally:
+        db.close()
+    for ws in list(sockets):
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            sockets.discard(ws)
+    return payload
+
+
+def comparison_dict(db: Session, c: Comparison) -> dict:
+    local = db.get(Reading, c.local_reading_id)
+    ref = db.get(Reading, c.ref_reading_id)
+    local_changed = local is None or local.ch4_pct != c.local_ch4_pct
+    ref_changed = ref is None or ref.ch4_pct != c.ref_ch4_pct
+    return {
+        "id": c.id,
+        "local_reading_id": c.local_reading_id,
+        "ref_reading_id": c.ref_reading_id,
+        "local_site": c.local_site,
+        "ref_site": c.ref_site,
+        "local_ch4_pct": c.local_ch4_pct,
+        "ref_ch4_pct": c.ref_ch4_pct,
+        "local_level": c.local_level,
+        "ref_level": c.ref_level,
+        "delta_pct": c.delta_pct,
+        "vent_minutes": c.vent_minutes,
+        "created_by": c.created_by,
+        "local_changed": local_changed,
+        "ref_changed": ref_changed,
+        "source_changed": local_changed or ref_changed,
+    }
+
+
+@app.post("/api/comparisons", status_code=201)
+def create_comparison(body: ComparisonIn, user: dict = Depends(require_writer)):
+    if body.local_reading_id == body.ref_reading_id:
+        raise HTTPException(status_code=400, detail="通风前后必须是两条不同班测")
+    db = SessionLocal()
+    try:
+        local = db.get(Reading, body.local_reading_id)
+        ref = db.get(Reading, body.ref_reading_id)
+        if local is None or ref is None:
+            raise HTTPException(status_code=404, detail="参照班测不存在")
+        row = Comparison(
+            local_reading_id=local.id,
+            ref_reading_id=ref.id,
+            local_site=local.site,
+            ref_site=ref.site,
+            local_ch4_pct=local.ch4_pct,
+            ref_ch4_pct=ref.ch4_pct,
+            local_level=local.level,
+            ref_level=ref.level,
+            delta_pct=round(abs(local.ch4_pct - ref.ch4_pct), 2),
+            vent_minutes=body.vent_minutes,
+            created_by=user["username"],
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return comparison_dict(db, row)
+    finally:
+        db.close()
+
+
+@app.get("/api/comparisons")
+def list_comparisons(_user: dict = Depends(current_user)):
+    db = SessionLocal()
+    try:
+        rows = db.query(Comparison).order_by(Comparison.id.desc()).all()
+        return [comparison_dict(db, c) for c in rows]
+    finally:
+        db.close()
+
+
+@app.get("/api/comparisons/{comparison_id}")
+def get_comparison(comparison_id: int, _user: dict = Depends(current_user)):
+    db = SessionLocal()
+    try:
+        row = db.get(Comparison, comparison_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="对照不存在")
+        return comparison_dict(db, row)
+    finally:
+        db.close()
 
 
 @app.websocket("/ws/alerts")
